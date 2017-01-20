@@ -4,19 +4,18 @@
  * Copyright (C) 2014 Mohammed Sameer <msameer@foolab.org>
  *
  * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Library General Public
+ * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Library General Public License for more details.
+ * Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU Library General Public
- * License along with this library; if not, write to the
- * Free Software Foundation, Inc., 51 Franklin St, Fifth Floor,
- * Boston, MA 02110-1301, USA.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
 #ifdef HAVE_CONFIG_H
@@ -113,9 +112,12 @@ static GList *gst_droidcamsrc_photography_load (GKeyFile * file,
 	break;								\
       }									\
     }									\
+									\
     if (value) {							\
       GST_INFO_OBJECT (src, "setting %s to %s", droid, value);		\
       gst_droidcamsrc_params_set_string (src->dev->params, droid, value); \
+    } else {								\
+      GST_WARNING_OBJECT (src, "setting %s to %d is not supported", droid, val); \
     }									\
   }
 
@@ -130,9 +132,14 @@ static GList *gst_droidcamsrc_photography_load (GKeyFile * file,
       break;								\
     }									\
   }									\
+									\
   if (!value) {								\
+    GST_WARNING_OBJECT (src, "setting %s to %d is not supported", droid, val); \
     return FALSE;							\
   }									\
+									\
+  GST_DEBUG_OBJECT (src, "setting %s to %s (%d)", droid, value, val);	\
+									\
   GST_OBJECT_LOCK (src);						\
   src->photo->settings.memb = val;					\
   GST_OBJECT_UNLOCK (src);						\
@@ -179,6 +186,14 @@ static void gst_droidcamsrc_photography_set_zoom_to_droid (GstDroidCamSrc *
     src);
 static void
 gst_droidcamsrc_photography_set_ev_compensation_to_droid (GstDroidCamSrc * src);
+
+static void
+free_data_entry (gpointer * data)
+{
+  struct DataEntry *entry = (struct DataEntry *) data;
+  g_free (entry->value);
+  g_slice_free (struct DataEntry, entry);
+}
 
 static GstPhotographyCaps
 gst_droidcamsrc_photography_get_capabilities (GstPhotography * photo)
@@ -584,15 +599,43 @@ sort_desc (gconstpointer a, gconstpointer b)
 }
 
 void
-gst_droidcamsrc_photography_init (GstDroidCamSrc * src)
+gst_droidcamsrc_photography_init (GstDroidCamSrc * src, gint dev)
 {
   int x;
   GKeyFile *file = g_key_file_new ();
   gchar *file_path =
-      g_build_path ("/", SYSCONFDIR, "gst-droid/gstdroidcamsrc.conf", NULL);
+      g_strdup_printf ("/%s/gst-droid/gstdroidcamsrc-%d.conf", SYSCONFDIR, dev);
   GError *err = NULL;
 
-  src->photo = g_slice_new0 (GstDroidCamSrcPhotography);
+  GST_INFO_OBJECT (src, "using configuration file %s", file_path);
+
+  if (!src->photo) {
+    src->photo = g_slice_new0 (GstDroidCamSrcPhotography);
+    src->photo->settings.wb_mode = GST_PHOTOGRAPHY_WB_MODE_AUTO;
+    src->photo->settings.tone_mode = GST_PHOTOGRAPHY_COLOR_TONE_MODE_NORMAL;
+    src->photo->settings.scene_mode = GST_PHOTOGRAPHY_SCENE_MODE_AUTO;
+    src->photo->settings.flash_mode = GST_PHOTOGRAPHY_FLASH_MODE_AUTO;
+    src->photo->settings.ev_compensation = 0.0;
+    src->photo->settings.iso_speed = 0;
+    src->photo->settings.zoom = 1.0;
+    src->photo->settings.flicker_mode = GST_PHOTOGRAPHY_FLICKER_REDUCTION_AUTO;
+    src->photo->settings.focus_mode =
+        GST_PHOTOGRAPHY_FOCUS_MODE_CONTINUOUS_NORMAL;
+
+    /* not supported */
+    src->photo->settings.aperture = 0;
+    src->photo->settings.noise_reduction = 0;
+    src->photo->settings.lens_focus = 0.0;
+    src->photo->settings.analog_gain = 0.0;
+    src->photo->settings.min_exposure_time = 0;
+    src->photo->settings.max_exposure_time = 0;
+    src->photo->settings.color_temperature = 0;
+    src->photo->settings.exposure_time = 0;
+    src->photo->settings.exposure_mode = GST_PHOTOGRAPHY_EXPOSURE_MODE_AUTO;
+    for (x = 0; x < MAX_WHITE_POINT_VALUES; x++) {
+      src->photo->settings.white_point[x] = 0;
+    }
+  }
 
   if (!g_key_file_load_from_file (file, file_path, G_KEY_FILE_NONE, &err)) {
     GST_WARNING ("failed to load configuration file %s: %s", file_path,
@@ -604,54 +647,48 @@ gst_droidcamsrc_photography_init (GstDroidCamSrc * src)
     err = NULL;
   }
 
-  src->photo->settings.wb_mode = GST_PHOTOGRAPHY_WB_MODE_AUTO;
-  src->photo->settings.tone_mode = GST_PHOTOGRAPHY_COLOR_TONE_MODE_NORMAL;
-  src->photo->settings.scene_mode = GST_PHOTOGRAPHY_SCENE_MODE_AUTO;
-  src->photo->settings.flash_mode = GST_PHOTOGRAPHY_FLASH_MODE_AUTO;
-  src->photo->settings.ev_compensation = 0.0;
-  src->photo->settings.iso_speed = 0;
-  src->photo->settings.zoom = 1.0;
-  src->photo->settings.flicker_mode = GST_PHOTOGRAPHY_FLICKER_REDUCTION_OFF;
-  src->photo->settings.focus_mode =
-      GST_PHOTOGRAPHY_FOCUS_MODE_CONTINUOUS_NORMAL;
-
-  /* not supported */
-  src->photo->settings.aperture = 0;
-  src->photo->settings.noise_reduction = 0;
-  src->photo->settings.lens_focus = 0.0;
-  src->photo->settings.analog_gain = 0.0;
-  src->photo->settings.min_exposure_time = 0;
-  src->photo->settings.max_exposure_time = 0;
-  src->photo->settings.color_temperature = 0;
-  src->photo->settings.exposure_time = 0;
-  src->photo->settings.exposure_mode = GST_PHOTOGRAPHY_EXPOSURE_MODE_AUTO;
-  for (x = 0; x < MAX_WHITE_POINT_VALUES; x++) {
-    src->photo->settings.white_point[x] = 0;
-  }
-
   /* load settings */
+  if (src->photo->flash) {
+    g_list_free_full (src->photo->flash, (GDestroyNotify) free_data_entry);
+  }
   src->photo->flash = gst_droidcamsrc_photography_load (file, "flash-mode");
+
+  if (src->photo->color_tone) {
+    g_list_free_full (src->photo->color_tone, (GDestroyNotify) free_data_entry);
+  }
   src->photo->color_tone =
       gst_droidcamsrc_photography_load (file, "color-tone-mode");
+
+  if (src->photo->focus) {
+    g_list_free_full (src->photo->focus, (GDestroyNotify) free_data_entry);
+  }
   src->photo->focus = gst_droidcamsrc_photography_load (file, "focus-mode");
+
+  if (src->photo->scene) {
+    g_list_free_full (src->photo->scene, (GDestroyNotify) free_data_entry);
+  }
   src->photo->scene = gst_droidcamsrc_photography_load (file, "scene-mode");
+
+  if (src->photo->wb) {
+    g_list_free_full (src->photo->wb, (GDestroyNotify) free_data_entry);
+  }
   src->photo->wb =
       gst_droidcamsrc_photography_load (file, "white-balance-mode");
+
+  if (src->photo->iso) {
+    g_list_free_full (src->photo->iso, (GDestroyNotify) free_data_entry);
+  }
   src->photo->iso = gst_droidcamsrc_photography_load (file, "iso-speed");
   src->photo->iso = g_list_sort (src->photo->iso, sort_desc);
+
+  if (src->photo->flicker) {
+    g_list_free_full (src->photo->flicker, (GDestroyNotify) free_data_entry);
+  }
   src->photo->flicker = gst_droidcamsrc_photography_load (file, "flicker-mode");
 
   /* free our stuff */
   g_free (file_path);
   g_key_file_unref (file);
-}
-
-static void
-free_data_entry (gpointer * data)
-{
-  struct DataEntry *entry = (struct DataEntry *) data;
-  g_free (entry->value);
-  g_slice_free (struct DataEntry, entry);
 }
 
 void
@@ -954,6 +991,16 @@ gst_droidcamsrc_set_ev_compensation (GstDroidCamSrc * src, gfloat ev_comp)
   gboolean ret;
 
   ev_comp = CLAMP (ev_comp, src->min_ev_compensation, src->max_ev_compensation);
+
+  if (src->ev_step == 0) {
+    GST_DEBUG_OBJECT (src,
+        "ev_step is still unknown. discarding requested ev compensation");
+    GST_OBJECT_LOCK (src);
+    src->photo->settings.ev_compensation = ev_comp;
+    GST_OBJECT_UNLOCK (src);
+    return FALSE;
+  }
+
   val = ev_comp / src->ev_step;
 
   value = g_strdup_printf ("%d", val);
@@ -990,6 +1037,7 @@ gst_droidcamsrc_set_iso_speed (GstDroidCamSrc * src, guint iso_speed)
   }
 
   if (!value) {
+    GST_WARNING_OBJECT (src, "setting iso to %d is not supported", iso_speed);
     return FALSE;
   }
 
@@ -1059,6 +1107,8 @@ gst_droidcamsrc_set_zoom (GstDroidCamSrc * src, gfloat zoom)
   GST_OBJECT_UNLOCK (src);
 
   if (step > max_zoom) {
+    GST_WARNING_OBJECT (src, "requested zoom (%d) is larger than max zoom (%d)",
+        step, max_zoom);
     return FALSE;
   }
 
@@ -1101,6 +1151,8 @@ gst_droidcamsrc_set_focus_mode (GstDroidCamSrc
   }
 
   if (!value) {
+    GST_WARNING_OBJECT (src, "setting focus-mode to %d is not supported",
+        focus_mode);
     return FALSE;
   }
 
@@ -1274,6 +1326,8 @@ gst_droidcamsrc_photography_set_focus_to_droid (GstDroidCamSrc * src)
   }
 
   if (!value) {
+    GST_WARNING_OBJECT (src, "setting focus-mode to %d is not supported",
+        src->photo->settings.focus_mode);
     return;
   }
 
@@ -1302,8 +1356,13 @@ gst_droidcamsrc_photography_set_flash_to_droid (GstDroidCamSrc * src)
     return;
   }
 
-  if (src->mode == MODE_VIDEO && src->video_torch) {
-    gst_droidcamsrc_params_set_string (src->dev->params, "flash-mode", "torch");
+  if (src->mode == MODE_VIDEO) {
+    if (src->video_torch) {
+      gst_droidcamsrc_params_set_string (src->dev->params, "flash-mode",
+          "torch");
+    } else {
+      gst_droidcamsrc_params_set_string (src->dev->params, "flash-mode", "off");
+    }
     return;
   }
 
@@ -1316,10 +1375,14 @@ gst_droidcamsrc_photography_set_flash_to_droid (GstDroidCamSrc * src)
     }
   }
 
-  if (value) {
-    GST_INFO_OBJECT (src, "setting flash-mode to %s", value);
-    gst_droidcamsrc_params_set_string (src->dev->params, "flash-mode", value);
+  if (!value) {
+    GST_WARNING_OBJECT (src, "setting flash-mode to %d is not supported",
+        src->photo->settings.flash_mode);
+    return;
   }
+
+  GST_INFO_OBJECT (src, "setting flash-mode to %s", value);
+  gst_droidcamsrc_params_set_string (src->dev->params, "flash-mode", value);
 }
 
 static void
@@ -1339,6 +1402,8 @@ gst_droidcamsrc_photography_set_iso_to_droid (GstDroidCamSrc * src)
   }
 
   if (!value) {
+    GST_WARNING_OBJECT (src, "setting iso to %d is not supported",
+        src->photo->settings.iso_speed);
     return;
   }
 
@@ -1368,6 +1433,12 @@ gst_droidcamsrc_photography_set_ev_compensation_to_droid (GstDroidCamSrc * src)
   int val;
   gchar *value;
   gfloat ev_comp;
+
+  if (src->ev_step == 0) {
+    GST_DEBUG_OBJECT (src,
+        "Cannot set exposure compensation because ev_step is still unknown.");
+    return;
+  }
 
   ev_comp =
       CLAMP (src->photo->settings.ev_compensation, src->min_ev_compensation,

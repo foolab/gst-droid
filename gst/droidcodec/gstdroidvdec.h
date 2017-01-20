@@ -5,19 +5,18 @@
  * Copyright (C) 2015 Jolla LTD.
  *
  * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Library General Public
+ * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Library General Public License for more details.
+ * Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU Library General Public
- * License along with this library; if not, write to the
- * Free Software Foundation, Inc., 51 Franklin St, Fifth Floor,
- * Boston, MA 02110-1301, USA.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
 #ifndef __GST_DROID_V_DEC_H__
@@ -25,7 +24,7 @@
 
 #include <gst/gst.h>
 #include <gst/video/gstvideodecoder.h>
-#include "gstdroidcodec.h"
+#include "gst/droid/gstdroidcodec.h"
 #include "droidmediaconvert.h"
 
 G_BEGIN_DECLS
@@ -43,6 +42,15 @@ G_BEGIN_DECLS
 
 typedef struct _GstDroidVDec GstDroidVDec;
 typedef struct _GstDroidVDecClass GstDroidVDecClass;
+typedef enum _GstDroidVDecState GstDroidVDecState;
+
+enum _GstDroidVDecState
+{
+  GST_DROID_VDEC_STATE_OK,
+  GST_DROID_VDEC_STATE_ERROR,
+  GST_DROID_VDEC_STATE_WAITING_FOR_EOS,
+  GST_DROID_VDEC_STATE_EOS,
+};
 
 struct _GstDroidVDec
 {
@@ -53,9 +61,9 @@ struct _GstDroidVDec
   GstDroidCodec *codec_type;
 
   /* eos handling */
-  gboolean eos;
-  GMutex eos_lock;
-  GCond eos_cond;
+  GstDroidVDecState state;
+  GMutex state_lock;
+  GCond state_cond;
 
   GstBufferPool *pool;
 
@@ -64,7 +72,11 @@ struct _GstDroidVDec
   GstBuffer *codec_data;
   gboolean dirty;
   DroidMediaRect crop_rect;
-  GstVideoInfo info;
+  gboolean running;
+  GstVideoFormat format;
+
+  gsize codec_reported_height;
+  gsize codec_reported_width;
 
   GstVideoCodecState *in_state;
   GstVideoCodecState *out_state;

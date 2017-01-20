@@ -5,19 +5,18 @@
  * Copyright (C) 2015 Jolla LTD.
  *
  * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Library General Public
+ * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Library General Public License for more details.
+ * Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU Library General Public
- * License along with this library; if not, write to the
- * Free Software Foundation, Inc., 51 Franklin St, Fifth Floor,
- * Boston, MA 02110-1301, USA.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
 #ifdef HAVE_CONFIG_H
@@ -25,7 +24,6 @@
 #endif
 
 #include "gstdroidcodec.h"
-#include "plugin.h"
 #include <glib.h>
 #include <gst/base/gstbytewriter.h>
 #ifndef GST_USE_UNSTABLE_API
@@ -38,18 +36,22 @@ GST_DEBUG_CATEGORY_EXTERN (gst_droid_codec_debug);
 
 static GstBuffer *create_mpeg4venc_codec_data (DroidMediaData * data);
 static GstBuffer *create_h264enc_codec_data (DroidMediaData * data);
-static gboolean create_mpeg4vdec_codec_data (GstDroidCodec * codec,
-    GstBuffer * data, DroidMediaData * out, GstBuffer * frame_data);
-static gboolean create_h264dec_codec_data (GstDroidCodec * codec,
-    GstBuffer * data, DroidMediaData * out, GstBuffer * frame_data);
-static gboolean create_aacdec_codec_data (GstDroidCodec * codec,
-    GstBuffer * data, DroidMediaData * out, GstBuffer * frame_data);
+static gboolean create_mpeg4vdec_codec_data_from_codec_data (GstDroidCodec *
+    codec, GstBuffer * data, DroidMediaData * out);
+static gboolean create_h264dec_codec_data_from_codec_data (GstDroidCodec *
+    codec, GstBuffer * data, DroidMediaData * out);
+static gboolean create_vp8vdec_codec_data_from_codec_data (GstDroidCodec *
+    codec, GstBuffer * data, DroidMediaData * out);
+static gboolean create_aacdec_codec_data_from_codec_data (GstDroidCodec * codec,
+    GstBuffer * data, DroidMediaData * out);
+static gboolean create_aacdec_codec_data_from_frame_data (GstDroidCodec * codec,
+    GstBuffer * frame_data, DroidMediaData * out);
 static gboolean process_h264dec_data (GstDroidCodec * codec, GstBuffer * buffer,
     DroidMediaData * out);
 static gboolean process_aacdec_data (GstDroidCodec * codec, GstBuffer * buffer,
     DroidMediaData * out);
 static gboolean is_mpeg4v (GstDroidCodec * codec, const GstStructure * s);
-static gboolean is_aac_dec (GstDroidCodec * codec, const GstStructure * s);
+static gboolean is_mpega (GstDroidCodec * codec, const GstStructure * s);
 static gboolean is_mp3 (GstDroidCodec * codec, const GstStructure * s);
 static gboolean is_h264_dec (GstDroidCodec * codec, const GstStructure * s);
 static gboolean is_h264_enc (GstDroidCodec * codec, const GstStructure * s);
@@ -58,13 +60,13 @@ static gboolean process_h264enc_data (DroidMediaData * in,
     DroidMediaData * out);
 static void gst_droid_codec_release_input_frame (void *data);
 static void gst_droid_codec_free (GstDroidCodec * codec);
+static void gst_droid_codec_type_fill_quirks (GstDroidCodec * codec);
 
 GST_DEFINE_MINI_OBJECT_TYPE (GstDroidCodec, gst_droid_codec);
 
 typedef struct
 {
   gpointer data;
-  GstVideoCodecFrame *frame;
 } GstDroidCodecFrameReleaseData;
 
 struct _GstDroidCodecPrivate
@@ -79,6 +81,7 @@ struct _GstDroidCodecInfo
   const gchar *mime;
   const gchar *droid;
   const gchar *caps;
+  gboolean enabled;
 
     gboolean (*validate_structure) (GstDroidCodec * codec,
       const GstStructure * s);
@@ -86,64 +89,64 @@ struct _GstDroidCodecInfo
   GstBuffer *(*create_encoder_codec_data) (DroidMediaData * data);
     gboolean (*process_encoder_data) (DroidMediaData * in,
       DroidMediaData * out);
-    gboolean (*create_decoder_codec_data) (GstDroidCodec * codec,
-      GstBuffer * data, DroidMediaData * out, GstBuffer * frame_data);
+    gboolean (*create_decoder_codec_data_from_codec_data) (GstDroidCodec *
+      codec, GstBuffer * codec_data, DroidMediaData * out);
+    gboolean (*create_decoder_codec_data_from_frame_data) (GstDroidCodec *
+      codec, GstBuffer * frame_data, DroidMediaData * out);
     gboolean (*process_decoder_data) (GstDroidCodec * codec, GstBuffer * buffer,
       DroidMediaData * out);
 };
 
 /* codecs */
-#define CAPS_FRAGMENT_VIDEO \
-  " , width = (int) [1, MAX], height = (int)[1, MAX], framerate = (fraction)[1/MAX, MAX]"
-
-#define CAPS_FRAGMENT_AUDIO_DECODER \
-  " , channels = (int) [1, 6]"
-
 #define CAPS_FRAGMENT_AUDIO_ENCODER \
   " , channels = (int) [1, 2]"
 
 static GstDroidCodecInfo codecs[] = {
   /* audio decoders */
   {GST_DROID_CODEC_DECODER_AUDIO, "audio/mpeg", "audio/mp4a-latm",
-        "audio/mpeg, mpegversion=(int)4, stream-format=(string){raw, adts}"
-        CAPS_FRAGMENT_AUDIO_DECODER,
-        is_aac_dec, NULL, NULL, NULL, create_aacdec_codec_data,
-      process_aacdec_data},
+        "audio/mpeg, mpegversion=(int){2, 4}, stream-format=(string){raw, adts}",
+        TRUE,
+        is_mpega, NULL, NULL, NULL, create_aacdec_codec_data_from_codec_data,
+      create_aacdec_codec_data_from_frame_data, process_aacdec_data},
 
   {GST_DROID_CODEC_DECODER_AUDIO, "audio/mpeg", "audio/mpeg",
-        "audio/mpeg, mpegversion=(int)1, layer=[1, 3]"
-        CAPS_FRAGMENT_AUDIO_DECODER,
-      is_mp3, NULL, NULL, NULL, NULL, NULL},
+        "audio/mpeg, mpegversion=(int)1, layer=[1, 3]", TRUE,
+      is_mp3, NULL, NULL, NULL, NULL, NULL, NULL},
 
   /* video decoders */
   {GST_DROID_CODEC_DECODER_VIDEO, "video/mpeg", "video/mp4v-es",
-        "video/mpeg, mpegversion=4" CAPS_FRAGMENT_VIDEO,
-      is_mpeg4v, NULL, NULL, NULL, create_mpeg4vdec_codec_data, NULL},
+        "video/mpeg, mpegversion=4", TRUE,
+        is_mpeg4v, NULL, NULL, NULL,
+      create_mpeg4vdec_codec_data_from_codec_data, NULL, NULL},
 
   {GST_DROID_CODEC_DECODER_VIDEO, "video/x-h264", "video/avc",
-        "video/x-h264, stream-format=avc,alignment=au" CAPS_FRAGMENT_VIDEO,
+        "video/x-h264, stream-format=avc,alignment=au", TRUE,
         is_h264_dec, NULL, NULL, NULL,
-      create_h264dec_codec_data, process_h264dec_data},
+      create_h264dec_codec_data_from_codec_data, NULL, process_h264dec_data},
 
   {GST_DROID_CODEC_DECODER_VIDEO, "video/x-h263", "video/3gpp",
-        "video/x-h263" CAPS_FRAGMENT_VIDEO, NULL,
-      NULL, NULL, NULL, NULL, NULL},
+        "video/x-h263", TRUE, NULL,
+      NULL, NULL, NULL, NULL, NULL, NULL},
+
+  {GST_DROID_CODEC_DECODER_VIDEO, "video/x-vp8", "video/x-vnd.on2.vp8",
+        "video/x-vp8", FALSE, NULL, NULL, NULL, NULL,
+      create_vp8vdec_codec_data_from_codec_data, NULL, NULL},
 
   /* audio encoders */
   {GST_DROID_CODEC_ENCODER_AUDIO, "audio/mpeg", "audio/mp4a-latm",
         "audio/mpeg, mpegversion=(int)4, stream-format=(string){raw}"
-        CAPS_FRAGMENT_AUDIO_ENCODER,
-      is_mpeg4v, NULL, create_mpeg4venc_codec_data, NULL, NULL, NULL},
+        CAPS_FRAGMENT_AUDIO_ENCODER, TRUE,
+      is_mpeg4v, NULL, create_mpeg4venc_codec_data, NULL, NULL, NULL, NULL},
 
   /* video encoders */
   {GST_DROID_CODEC_ENCODER_VIDEO, "video/mpeg", "video/mp4v-es",
-        "video/mpeg, mpegversion=4, systemstream=false" CAPS_FRAGMENT_VIDEO,
-      is_mpeg4v, NULL, create_mpeg4venc_codec_data, NULL, NULL, NULL},
+        "video/mpeg, mpegversion=4, systemstream=false", TRUE,
+      is_mpeg4v, NULL, create_mpeg4venc_codec_data, NULL, NULL, NULL, NULL},
 
   {GST_DROID_CODEC_ENCODER_VIDEO, "video/x-h264", "video/avc",
-        "video/x-h264, stream-format=avc,alignment=au" CAPS_FRAGMENT_VIDEO,
+        "video/x-h264, stream-format=avc,alignment=au", TRUE,
         is_h264_enc, h264enc_complement, create_h264enc_codec_data,
-      process_h264enc_data, NULL, NULL},
+      process_h264enc_data, NULL, NULL, NULL},
 };
 
 GstDroidCodec *
@@ -173,6 +176,10 @@ gst_droid_codec_new_from_caps (GstCaps * caps, GstDroidCodecType type)
           (GstMiniObjectFreeFunction) gst_droid_codec_free);
 
       codec->info = &codecs[x];
+
+      /* Fill codec quirks */
+      gst_droid_codec_type_fill_quirks (codec);
+
       return codec;
     }
   }
@@ -188,17 +195,40 @@ gst_droid_codec_get_all_caps (GstDroidCodecType type)
   GstCaps *caps = gst_caps_new_empty ();
   int x = 0;
   int len = G_N_ELEMENTS (codecs);
+  GKeyFile *file = g_key_file_new ();
+  gchar *path = g_strdup_printf ("%s/gst-droid/gstdroidcodec.conf", SYSCONFDIR);
+  gchar *group = type == GST_DROID_CODEC_DECODER_AUDIO
+      || type == GST_DROID_CODEC_DECODER_VIDEO ? "decoders" : "encoders";
+
+  g_key_file_load_from_file (file, path, G_KEY_FILE_NONE, NULL);
+  g_free (path);
 
   for (x = 0; x < len; x++) {
+    gboolean codec_listed;
+    gint codec_enabled;
+    GstStructure *s;
+
     if (codecs[x].type != type) {
       continue;
     }
 
-    GstStructure *s = gst_structure_new_from_string (codecs[x].caps);
+    /* If the codec is listed in the configuration file then we obey it.
+     * Otherwise we fallback to our hard-coded default */
+    codec_listed = g_key_file_has_key (file, group, codecs[x].droid, NULL);
+    codec_enabled = g_key_file_get_integer (file, group, codecs[x].droid, NULL);
+    if ((codec_listed && !codec_enabled) || (!codec_listed
+            && !codecs[x].enabled)) {
+      GST_INFO ("%s is disabled", codecs[x].droid);
+      continue;
+    }
+
+    s = gst_structure_new_from_string (codecs[x].caps);
     caps = gst_caps_merge_structure (caps, s);
   }
 
   GST_INFO ("caps %" GST_PTR_FORMAT, caps);
+
+  g_key_file_free (file);
 
   return caps;
 }
@@ -234,14 +264,25 @@ GstDroidCodecCodecDataResult
 gst_droid_codec_create_decoder_codec_data (GstDroidCodec * codec,
     GstBuffer * data, DroidMediaData * out, GstBuffer * frame_data)
 {
-  if (!codec->info->create_decoder_codec_data) {
-    return GST_DROID_CODEC_CODEC_DATA_NOT_NEEDED;
-  } else if (codec->info->create_decoder_codec_data (codec, data, out,
-          frame_data)) {
-    return GST_DROID_CODEC_CODEC_DATA_OK;
-  } else {
-    return GST_DROID_CODEC_CODEC_DATA_ERROR;
+  /* We always have frame_data */
+
+  if (data) {
+    /* We must process it */
+
+    if (!codec->info->create_decoder_codec_data_from_codec_data) {
+      return GST_DROID_CODEC_CODEC_DATA_ERROR;
+    }
+    return codec->info->create_decoder_codec_data_from_codec_data (codec, data,
+        out) ? GST_DROID_CODEC_CODEC_DATA_OK : GST_DROID_CODEC_CODEC_DATA_ERROR;
   }
+
+  if (!codec->info->create_decoder_codec_data_from_frame_data) {
+    return GST_DROID_CODEC_CODEC_DATA_NOT_NEEDED;
+  }
+
+  return codec->info->create_decoder_codec_data_from_frame_data (codec,
+      frame_data,
+      out) ? GST_DROID_CODEC_CODEC_DATA_OK : GST_DROID_CODEC_CODEC_DATA_ERROR;
 }
 
 gboolean
@@ -273,7 +314,6 @@ gst_droid_codec_prepare_decoder_frame (GstDroidCodec * codec,
   release_data = g_slice_new (GstDroidCodecFrameReleaseData);
 
   release_data->data = data->data;
-  release_data->frame = gst_video_codec_frame_ref (frame);
 
   cb->unref = gst_droid_codec_release_input_frame;
   cb->data = release_data;
@@ -516,11 +556,16 @@ is_mpeg4v (GstDroidCodec * codec G_GNUC_UNUSED, const GstStructure * s)
 }
 
 static gboolean
-is_aac_dec (GstDroidCodec * codec, const GstStructure * s)
+is_mpega (GstDroidCodec * codec, const GstStructure * s)
 {
   const gchar *val;
+  gint ver;
 
-  if (!is_mpeg4v (codec, s)) {
+  if (!gst_structure_get_int (s, "mpegversion", &ver)) {
+    return FALSE;
+  }
+
+  if (!(ver == 2 || ver == 4)) {
     return FALSE;
   }
 
@@ -586,9 +631,8 @@ h264enc_complement (GstCaps * caps)
 }
 
 static gboolean
-create_mpeg4vdec_codec_data (GstDroidCodec * codec G_GNUC_UNUSED,
-    GstBuffer * data, DroidMediaData * out,
-    GstBuffer * frame_data G_GNUC_UNUSED)
+create_mpeg4vdec_codec_data_from_codec_data (GstDroidCodec *
+    codec G_GNUC_UNUSED, GstBuffer * data, DroidMediaData * out)
 {
   /*
    * If there are things which I hate the most, this function will be among them
@@ -647,8 +691,36 @@ create_mpeg4vdec_codec_data (GstDroidCodec * codec G_GNUC_UNUSED,
 }
 
 static gboolean
-create_h264dec_codec_data (GstDroidCodec * codec, GstBuffer * data,
-    DroidMediaData * out, GstBuffer * frame_data G_GNUC_UNUSED)
+create_vp8vdec_codec_data_from_codec_data (GstDroidCodec * codec,
+    GstBuffer * data, DroidMediaData * out)
+{
+  GstMapInfo info;
+  gboolean ret = FALSE;
+
+  if (!gst_buffer_map (data, &info, GST_MAP_READ)) {
+    GST_ERROR ("failed to map buffer");
+    return FALSE;
+  }
+
+  if (info.size < 7 || info.data[0] != 1) {
+    GST_ERROR ("malformed codec_data");
+    goto out;
+  }
+
+  out->size = info.size;
+  out->data = g_malloc (info.size);
+  memcpy (out->data, info.data, info.size);
+  ret = TRUE;
+
+out:
+  gst_buffer_unmap (data, &info);
+
+  return ret;
+}
+
+static gboolean
+create_h264dec_codec_data_from_codec_data (GstDroidCodec * codec,
+    GstBuffer * data, DroidMediaData * out)
 {
   GstMapInfo info;
   gboolean ret = FALSE;
@@ -693,8 +765,8 @@ write_len (guint8 * buf, int val)
 }
 
 static gboolean
-create_aacdec_codec_data (GstDroidCodec * codec,
-    GstBuffer * data, DroidMediaData * out, GstBuffer * frame_data)
+create_aacdec_codec_data_from_codec_data (GstDroidCodec * codec G_GNUC_UNUSED,
+    GstBuffer * data, DroidMediaData * out)
 {
 #define _QT_PUT(__data, __idx, __size, __shift, __num) \
   (((guint8 *) (__data))[__idx] = (((guint##__size) __num) >> __shift) & 0xff)
@@ -706,40 +778,6 @@ create_aacdec_codec_data (GstDroidCodec * codec,
 
   GstMapInfo info;
   gboolean ret;
-
-  if (codec->data->aac_adts) {
-    /* stolen from gstaacparse.c */
-    guint8 codec_data[2];
-    guint16 codec_data_data;
-    gint sr_idx;
-    gint object;
-    gint channels;
-
-    GST_INFO ("constructing ADTS codec_data");
-
-    g_assert (data == NULL);
-
-    // TODO: size, TODO: error
-    if (!gst_buffer_map (frame_data, &info, GST_MAP_READ)) {
-      GST_ERROR ("failed to map buffer");
-      ret = FALSE;
-      goto out;
-    }
-
-    sr_idx = (info.data[2] & 0x3c) >> 2;
-    object = ((info.data[2] & 0xc0) >> 6) + 1;
-    channels = ((info.data[2] & 0x01) << 2) | ((info.data[3] & 0xc0) >> 6);
-    GST_INFO ("AAC info: sample rate index: %d, object type: %d, channels: %d",
-        sr_idx, object, channels);
-    gst_buffer_unmap (frame_data, &info);
-
-    codec_data_data = (object << 11) | sr_idx << 7 | channels << 3;
-
-    GST_WRITE_UINT16_BE (codec_data, codec_data_data);
-
-    data = gst_buffer_new_and_alloc (2);
-    gst_buffer_fill (data, 0, codec_data, 2);
-  }
 
   /*
    * blindly based on audiodecoders.c:make_aac_magic_cookie()
@@ -810,9 +848,55 @@ create_aacdec_codec_data (GstDroidCodec * codec,
   ret = TRUE;
 
 out:
-  if (data && codec->data->aac_adts) {
-    gst_buffer_unref (data);
+  return ret;
+}
+
+static gboolean
+create_aacdec_codec_data_from_frame_data (GstDroidCodec * codec,
+    GstBuffer * frame_data, DroidMediaData * out)
+{
+  GstMapInfo info;
+  gboolean ret;
+  GstBuffer *data;
+
+  guint8 codec_data[2];
+  guint16 codec_data_data;
+  gint sr_idx;
+  gint object;
+  gint channels;
+
+  if (!codec->data->aac_adts) {
+    GST_ERROR ("not ADTS stream");
+    return FALSE;
   }
+
+  /* stolen from gstaacparse.c */
+
+  GST_INFO ("constructing ADTS codec_data");
+
+  // TODO: size, TODO: error
+  if (!gst_buffer_map (frame_data, &info, GST_MAP_READ)) {
+    GST_ERROR ("failed to map buffer");
+    return FALSE;
+  }
+
+  sr_idx = (info.data[2] & 0x3c) >> 2;
+  object = ((info.data[2] & 0xc0) >> 6) + 1;
+  channels = ((info.data[2] & 0x01) << 2) | ((info.data[3] & 0xc0) >> 6);
+  GST_INFO ("AAC info: sample rate index: %d, object type: %d, channels: %d",
+      sr_idx, object, channels);
+  gst_buffer_unmap (frame_data, &info);
+
+  codec_data_data = (object << 11) | sr_idx << 7 | channels << 3;
+
+  GST_WRITE_UINT16_BE (codec_data, codec_data_data);
+
+  data = gst_buffer_new_and_alloc (2);
+  gst_buffer_fill (data, 0, codec_data, 2);
+
+  ret = create_aacdec_codec_data_from_codec_data (codec, data, out);
+
+  gst_buffer_unref (data);
 
   return ret;
 }
@@ -986,8 +1070,54 @@ gst_droid_codec_release_input_frame (void *data)
 {
   GstDroidCodecFrameReleaseData *info = (GstDroidCodecFrameReleaseData *) data;
 
-  gst_video_codec_frame_unref (info->frame);
   g_free (info->data);
 
   g_slice_free (GstDroidCodecFrameReleaseData, info);
+}
+
+static void
+gst_droid_codec_type_fill_quirks (GstDroidCodec * codec)
+{
+  GKeyFile *file = g_key_file_new ();
+  gchar *path = g_strdup_printf ("%s/gst-droid/gstdroidcodec.conf", SYSCONFDIR);
+  gchar **quirks_string = NULL;
+  const gchar *group
+      = (codec->info->type == GST_DROID_CODEC_DECODER_AUDIO
+      || codec->info->type ==
+      GST_DROID_CODEC_DECODER_VIDEO) ? "decoder-quirks" : "encoder-quirks";
+  gsize quirks_length = 0;
+  int x;
+
+  g_key_file_load_from_file (file, path, G_KEY_FILE_NONE, NULL);
+  g_free (path);
+
+  if (!g_key_file_has_group (file, group)) {
+    GST_LOG ("no quirks");
+    goto out;
+  }
+
+  quirks_string =
+      g_key_file_get_string_list (file, group, codec->info->droid,
+      &quirks_length, NULL);
+  if (!quirks_string) {
+    GST_LOG ("no quirks for %s", codec->info->droid);
+    goto out;
+  }
+
+  for (x = 0; x < quirks_length; x++) {
+    if (!g_strcmp0 (quirks_string[x], USE_CODEC_SUPPLIED_HEIGHT_NAME)) {
+      codec->quirks |= USE_CODEC_SUPPLIED_HEIGHT_VALUE;
+    } else if (!g_strcmp0 (quirks_string[x], USE_CODEC_SUPPLIED_WIDTH_NAME)) {
+      codec->quirks |= USE_CODEC_SUPPLIED_WIDTH_VALUE;
+    }
+  }
+
+out:
+  g_key_file_free (file);
+  file = NULL;
+
+  if (quirks_string) {
+    g_strfreev (quirks_string);
+    quirks_string = NULL;
+  }
 }

@@ -5,19 +5,18 @@
  * Copyright (C) 2015 Jolla LTD.
  *
  * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Library General Public
+ * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Library General Public License for more details.
+ * Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU Library General Public
- * License along with this library; if not, write to the
- * Free Software Foundation, Inc., 51 Franklin St, Fifth Floor,
- * Boston, MA 02110-1301, USA.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
 #ifdef HAVE_CONFIG_H
@@ -57,7 +56,8 @@ gst_droidadec_create_codec (GstDroidADec * dec, GstBuffer * input)
   DroidMediaCodecDecoderMetaData md;
   const gchar *droid = gst_droid_codec_get_droid_type (dec->codec_type);
 
-  GST_INFO_OBJECT (dec, "create codec of type %s", droid);
+  GST_INFO_OBJECT (dec, "create codec of type %s. Channels: %d, Rate: %d",
+      droid, dec->channels, dec->rate);
 
   memset (&md, 0x0, sizeof (md));
 
@@ -119,6 +119,8 @@ gst_droidadec_create_codec (GstDroidADec * dec, GstBuffer * input)
     return FALSE;
   }
 
+  dec->running = TRUE;
+
   return TRUE;
 }
 
@@ -132,17 +134,6 @@ gst_droidadec_data_available (void *data, DroidMediaCodecData * encoded)
   GstMapInfo info;
 
   GST_DEBUG_OBJECT (dec, "data available of size %d", encoded->data.size);
-
-  g_mutex_lock (&dec->eos_lock);
-  if (G_UNLIKELY (dec->eos)) {
-    GST_LOG_OBJECT (dec, "EOS. dropping data");
-    gst_audio_decoder_finish_frame (decoder, NULL, 1);
-    g_mutex_unlock (&dec->eos_lock);
-
-    return;
-  }
-
-  g_mutex_unlock (&dec->eos_lock);
 
   GST_AUDIO_DECODER_STREAM_LOCK (decoder);
 
@@ -242,6 +233,10 @@ gst_droidadec_error (void *data, int err)
   GstDroidADec *dec = (GstDroidADec *) data;
 
   GST_DEBUG_OBJECT (dec, "codec error");
+
+  GST_AUDIO_DECODER_STREAM_LOCK (dec);
+  dec->running = FALSE;
+  GST_AUDIO_DECODER_STREAM_UNLOCK (dec);
 
   g_mutex_lock (&dec->eos_lock);
 
@@ -345,6 +340,7 @@ gst_droidadec_start (GstAudioDecoder * decoder)
   dec->codec_type = NULL;
   dec->dirty = TRUE;
   dec->spf = -1;
+  dec->running = TRUE;
 
   return TRUE;
 }
@@ -365,9 +361,20 @@ gst_droidadec_set_format (GstAudioDecoder * decoder, GstCaps * caps)
   GST_DEBUG_OBJECT (dec, "set format %" GST_PTR_FORMAT, caps);
 
   if (dec->codec) {
-    GST_FIXME_OBJECT (dec, "What to do here?");
-    GST_ERROR_OBJECT (dec, "codec already configured");
-    return FALSE;
+    /* If we get a format change then we stop */
+    GstCaps *current =
+        gst_pad_get_current_caps (GST_AUDIO_DECODER_SINK_PAD (decoder));
+    gboolean equal = gst_caps_is_equal_fixed (caps, current);
+    gst_caps_unref (current);
+
+    GST_DEBUG_OBJECT (dec, "new format is similar to old format? %d", equal);
+
+    if (!equal) {
+      GST_ELEMENT_ERROR (dec, LIBRARY, SETTINGS, (NULL),
+          ("codec already configured"));
+    }
+
+    return equal;
   }
 
   dec->codec_type =
@@ -400,15 +407,23 @@ gst_droidadec_set_format (GstAudioDecoder * decoder, GstCaps * caps)
   return TRUE;
 }
 
+/* always call with stream lock */
 static GstFlowReturn
 gst_droidadec_finish (GstAudioDecoder * decoder)
 {
+  gboolean locked = FALSE;      /* TODO: This is a hack */
   GstDroidADec *dec = GST_DROIDADEC (decoder);
   gint available;
 
   GST_DEBUG_OBJECT (dec, "finish");
 
+  if (!dec->running) {
+    GST_DEBUG_OBJECT (dec, "decoder is not running");
+    goto finish;
+  }
+
   g_mutex_lock (&dec->eos_lock);
+  locked = TRUE;
   dec->eos = TRUE;
 
   if (dec->codec) {
@@ -423,6 +438,7 @@ gst_droidadec_finish (GstAudioDecoder * decoder)
   g_cond_wait (&dec->eos_cond, &dec->eos_lock);
   GST_AUDIO_DECODER_STREAM_LOCK (decoder);
 
+finish:
   /* We drained the codec. Better to recreate it. */
   if (dec->codec) {
     droid_media_codec_stop (dec->codec);
@@ -465,7 +481,9 @@ gst_droidadec_finish (GstAudioDecoder * decoder)
 out:
   dec->eos = FALSE;
 
-  g_mutex_unlock (&dec->eos_lock);
+  if (locked) {
+    g_mutex_unlock (&dec->eos_lock);
+  }
 
   return GST_FLOW_OK;
 }
@@ -482,14 +500,6 @@ gst_droidadec_handle_frame (GstAudioDecoder * decoder, GstBuffer * buffer)
 
   if (G_UNLIKELY (!buffer)) {
     return gst_droidadec_finish (decoder);
-  }
-
-  if (!GST_CLOCK_TIME_IS_VALID (buffer->dts)
-      && !GST_CLOCK_TIME_IS_VALID (buffer->pts)) {
-    GST_WARNING_OBJECT (dec,
-        "dropping received frame with invalid timestamps.");
-    ret = GST_FLOW_OK;
-    goto error;
   }
 
   if (dec->downstream_flow_ret != GST_FLOW_OK) {
@@ -539,15 +549,10 @@ gst_droidadec_handle_frame (GstAudioDecoder * decoder, GstBuffer * buffer)
       gst_buffer_get_size (buffer), data.data.size);
 
   /*
-   * try to use dts if pts is not valid.
-   * on one of the test streams we get the first PTS set to GST_CLOCK_TIME_NONE
-   * which breaks timestamping.
+   * We are ignoring timestamping completely and relying
+   * on the base class to do our bookkeeping ;-)
    */
-  data.ts =
-      GST_CLOCK_TIME_IS_VALID (buffer->
-      pts) ? GST_TIME_AS_USECONDS (buffer->pts) : GST_TIME_AS_USECONDS (buffer->
-      dts);
-
+  data.ts = 0;
   data.sync = false;
 
   /* This can deadlock if droidmedia/stagefright input buffer queue is full thus we

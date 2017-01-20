@@ -19,7 +19,6 @@ AM_MAINTAINER_MODE([enable])
 
 dnl check for tools (compiler etc.)
 AC_PROG_CC
-AM_PROG_CC_C_O
 
 dnl required version of libtool
 LT_PREREQ([2.2.6])
@@ -61,6 +60,17 @@ PKG_CHECK_MODULES(GST, [
       libgstreamer1.0-dev and libgstreamer-plugins-base1.0-dev.
       on RPM-based systems gstreamer1.0-devel, libgstreamer1.0-devel
       or similar. The minimum version required is $GST_REQUIRED.
+  ])
+])
+
+PKG_CHECK_MODULES(GSTPB, [
+  gstreamer-pbutils-1.0 >= $GST_REQUIRED
+], [
+  AC_SUBST(GSTPB_CFLAGS)
+  AC_SUBST(GSTPB_LIBS)
+], [
+  AC_MSG_ERROR([
+      gstreamer-pbutils-1.0 not found
   ])
 ])
 
@@ -166,6 +176,6 @@ AC_CONFIG_FILES([Makefile
 		gst/droideglsink/Makefile
 		gst/droidcodec/Makefile
 		gst/droidcamsrc/Makefile
-		data/Makefile])
+		tools/Makefile])
 AC_OUTPUT
 

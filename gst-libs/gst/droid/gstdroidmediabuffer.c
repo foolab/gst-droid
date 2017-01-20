@@ -4,19 +4,18 @@
  * Copyright (C) 2015 Jolla LTD.
  *
  * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Library General Public
+ * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Library General Public License for more details.
+ * Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU Library General Public
- * License along with this library; if not, write to the
- * Free Software Foundation, Inc., 51 Franklin St, Fifth Floor,
- * Boston, MA 02110-1301, USA.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
 #ifdef HAVE_CONFIG_H
@@ -27,6 +26,7 @@
 #include <EGL/eglext.h>
 #include <gst/gst.h>
 #include "gstdroidmediabuffer.h"
+#include "droidmediaconstants.h"
 
 GST_DEBUG_CATEGORY_STATIC (droid_memory_debug);
 #define GST_CAT_DEFAULT droid_memory_debug
@@ -35,6 +35,7 @@ typedef struct
 {
   GstAllocator parent;
 
+  DroidMediaPixelFormatConstants c;
 } GstDroidMediaBufferAllocator;
 
 typedef struct
@@ -84,6 +85,8 @@ droid_media_buffer_allocator_init (GstDroidMediaBufferAllocator * allocator)
   alloc->mem_copy = NULL;
   alloc->mem_share = NULL;
   alloc->mem_is_span = NULL;
+
+  droid_media_pixel_format_constants_init (&allocator->c);
 
   GST_OBJECT_FLAG_SET (allocator, GST_ALLOCATOR_FLAG_CUSTOM_ALLOC);
 }
@@ -137,10 +140,12 @@ gst_droid_media_buffer_allocator_alloc (GstAllocator * allocator,
 
 GstMemory *
 gst_droid_media_buffer_allocator_alloc_from_data (GstAllocator * allocator,
-    gsize w, gsize h, DroidMediaData * data, DroidMediaBufferCallbacks * cb)
+    GstVideoInfo * info, DroidMediaData * data, DroidMediaBufferCallbacks * cb)
 {
   GstDroidMediaBufferMemory *mem;
   DroidMediaBuffer *buffer;
+  int format;
+  GstDroidMediaBufferAllocator *alloc;
 
   if (!GST_IS_DROID_MEDIA_BUFFER_ALLOCATOR (allocator)) {
     GST_WARNING_OBJECT (allocator,
@@ -148,9 +153,25 @@ gst_droid_media_buffer_allocator_alloc_from_data (GstAllocator * allocator,
     return NULL;
   }
 
+  alloc = (GstDroidMediaBufferAllocator *) allocator;
+
+  if (info->finfo->format == GST_VIDEO_FORMAT_YV12) {
+    format = alloc->c.HAL_PIXEL_FORMAT_YV12;
+  } else if (info->finfo->format == GST_VIDEO_FORMAT_NV21) {
+    format = alloc->c.HAL_PIXEL_FORMAT_YCrCb_420_SP;
+  } else {
+    GST_WARNING_OBJECT (allocator,
+        "Unknown GStreamer format %s",
+        gst_video_format_to_string (info->finfo->format));
+    return NULL;
+  }
+
   mem = g_slice_new0 (GstDroidMediaBufferMemory);
 
-  buffer = droid_media_buffer_create_from_yv12_data (w, h, data, cb);
+  buffer =
+      droid_media_buffer_create_from_raw_data (info->width, info->height,
+      GST_VIDEO_INFO_COMP_STRIDE (info, 0),
+      GST_VIDEO_INFO_COMP_STRIDE (info, 1), format, data, cb);
   if (!buffer) {
     GST_ERROR_OBJECT (allocator, "failed to acquire media buffer");
     g_slice_free (GstDroidMediaBufferMemory, mem);

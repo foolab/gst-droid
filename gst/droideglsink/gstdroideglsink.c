@@ -5,19 +5,18 @@
  * Copyright (C) 2015 Jolla LTD.
  *
  * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Library General Public
+ * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Library General Public License for more details.
+ * Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU Library General Public
- * License along with this library; if not, write to the
- * Free Software Foundation, Inc., 51 Franklin St, Fifth Floor,
- * Boston, MA 02110-1301, USA.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
 #ifdef HAVE_CONFIG_H
@@ -44,7 +43,7 @@ static GstStaticPadTemplate gst_droideglsink_sink_template_factory =
     GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE ("YV12") "; "
+    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE ("{YV12, NV21}") "; "
         GST_VIDEO_CAPS_MAKE_WITH_FEATURES
         (GST_CAPS_FEATURE_MEMORY_DROID_MEDIA_BUFFER, "{YV12}")));
 
@@ -468,8 +467,9 @@ gst_droideglsink_copy_buffer (GstDroidEglSink * sink, GstBuffer * buffer)
 
   data.size = info.size;
   data.data = info.data;
+
   mem = gst_droid_media_buffer_allocator_alloc_from_data (sink->allocator,
-      format.width, format.height, &data, &cb);
+      &format, &data, &cb);
 
   if (!mem) {
     goto free_and_out;
@@ -664,12 +664,18 @@ gst_droideglsink_unbind_frame (NemoGstVideoTexture * iface)
 
   g_mutex_lock (&sink->lock);
 
+  if (sink->image == EGL_NO_IMAGE_KHR) {
+    GST_WARNING_OBJECT (sink, "Cannot unbind without a valid EGLImageKHR");
+    goto out;
+  }
+
   if (sink->eglDestroyImageKHR (sink->dpy, sink->image) != EGL_TRUE) {
     GST_WARNING_OBJECT (sink, "failed to destroy EGLImageKHR %p", sink->image);
   }
 
   sink->image = EGL_NO_IMAGE_KHR;
 
+out:
   g_mutex_unlock (&sink->lock);
 }
 

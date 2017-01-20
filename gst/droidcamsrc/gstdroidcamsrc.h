@@ -2,21 +2,21 @@
  * gst-droid
  *
  * Copyright (C) 2014 Mohammed Sameer <msameer@foolab.org>
+ * Copyright (C) 2016 Jolla LTD.
  *
  * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Library General Public
+ * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Library General Public License for more details.
+ * Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU Library General Public
- * License along with this library; if not, write to the
- * Free Software Foundation, Inc., 51 Franklin St, Fifth Floor,
- * Boston, MA 02110-1301, USA.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
 #ifndef __GST_DROIDCAMSRC_H__
@@ -112,6 +112,7 @@ struct _GstDroidCamSrc
   gboolean video_torch;
   gboolean face_detection;
   gboolean image_noise_reduction;
+  GstDroidCamSrcImageMode image_mode;
 
   GstDroidCamSrcPhotography * photo;
   gfloat max_zoom;
@@ -119,10 +120,13 @@ struct _GstDroidCamSrc
   gfloat max_ev_compensation;
   gfloat ev_step;
 
+  gint32 target_bitrate;
+
   /* protected with OBJECT_LOCK */
   gint width;
   gint height;
   gint fps_n, fps_d;
+  DroidMediaRect crop_rect;
 };
 
 struct _GstDroidCamSrcClass

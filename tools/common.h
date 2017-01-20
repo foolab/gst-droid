@@ -1,6 +1,7 @@
 /*
  * gst-droid
  *
+ * Copyright (C) 2014 Mohammed Sameer <msameer@foolab.org>
  * Copyright (C) 2015 Jolla LTD.
  *
  * This library is free software; you can redistribute it and/or
@@ -18,19 +19,49 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#ifndef __GST_DROID_QUERY_H__
-#define __GST_DROID_QUERY_H__
+#ifndef __COMMON_H__
+#define __COMMON_H__
 
 #include <gst/gst.h>
 
 G_BEGIN_DECLS
 
-#define GST_DROID_VIDEO_COLOR_FORMAT_QUERY_NAME "GetDroidVideoColorFormatQuery"
+typedef struct _Common Common;
 
-GstQuery *gst_droid_query_new_video_color_format();
-void gst_droid_query_set_video_color_format (GstQuery *query, gint format);
-gboolean gst_droid_query_parse_video_color_format (GstQuery *query, gint *format);
+struct _Common
+{
+  GstElement *bin;
+  GstElement *cam_src;
+  GstElement *aud_src;
+  GstElement *sink;
+  GMainLoop *loop;
+
+  void (* started) (Common *c);
+
+  int ret;
+};
+
+typedef enum {
+  PRIMARY = 0,
+  SECONDARY = 1,
+} Device;
+
+typedef enum {
+  IMAGE = 1,
+  VIDEO = 2,
+} Mode;
+
+Common *common_init (int *argc, char ***argv, char *bin);
+int common_destroy (Common *common, gboolean deinit);
+gboolean common_run (Common *c);
+
+void common_set_device_mode(Common *c, Device dev, Mode m);
+
+void common_set_vf_caps (Common *c, int w, int h, int fps_n, int fps_d);
+void common_set_video_caps (Common *c, int w, int h, int fps_n, int fps_d);
+
+void common_quit (Common *c, int ret);
 
 G_END_DECLS
 
-#endif /* __GST_DROID_QUERY_H__ */
+#endif /* __COMMON_H__ */

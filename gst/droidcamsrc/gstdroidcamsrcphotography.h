@@ -2,21 +2,21 @@
  * gst-droid
  *
  * Copyright (C) 2014 Mohammed Sameer <msameer@foolab.org>
+ * Copyright (C) 2016 Jolla LTD.
  *
  * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Library General Public
+ * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Library General Public License for more details.
+ * Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU Library General Public
- * License along with this library; if not, write to the
- * Free Software Foundation, Inc., 51 Franklin St, Fifth Floor,
- * Boston, MA 02110-1301, USA.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
 #ifndef __GST_DROIDCAMSRC_PHOTOGRAPHY_H__
@@ -32,8 +32,11 @@ typedef enum _GstDroidCamSrcApplyType GstDroidCamSrcApplyType;
 typedef enum
 {
   PROP_0,
+  PROP_DEVICE_PARAMETERS,
   PROP_CAMERA_DEVICE,
   PROP_MODE,
+  PROP_IMAGE_MODE,
+  PROP_SUPPORTED_IMAGE_MODES,
   PROP_READY_FOR_CAPTURE,
   PROP_MAX_ZOOM,
   PROP_VIDEO_TORCH,
@@ -43,6 +46,7 @@ typedef enum
   PROP_IMAGE_NOISE_REDUCTION,
   PROP_SENSOR_ORIENTATION,
   PROP_SENSOR_MOUNT_ANGLE,
+  PROP_TARGET_BITRATE,
 
   /* photography interface */
   PROP_WB_MODE,
@@ -71,7 +75,7 @@ typedef enum
 
 void gst_droidcamsrc_photography_register (gpointer g_iface,  gpointer iface_data);
 void gst_droidcamsrc_photography_add_overrides (GObjectClass * klass);
-void gst_droidcamsrc_photography_init (GstDroidCamSrc * src);
+void gst_droidcamsrc_photography_init (GstDroidCamSrc * src, gint dev);
 void gst_droidcamsrc_photography_destroy (GstDroidCamSrc * src);
 gboolean gst_droidcamsrc_photography_get_property (GstDroidCamSrc * src, guint prop_id,
 						   GValue * value, GParamSpec * pspec);
